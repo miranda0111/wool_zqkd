@@ -1,28 +1,33 @@
 /*
-安卓：中青看点 风险查询+今日收益详情
+安卓：中青看点
 
-需要用到zqkdCookie，只测试了青龙，理论上V2P也能用
-本脚本没有设置重写，请自己复制zq_cookie到青龙环境下使用，多账号用@隔开
-例子： export zqkdCookie='uid=xxx&zqkey=yyy&zqkey_id=zzz@uid=aaa&zqkey=bbb&zqkey_id=ccc@uid=qqq&zqkey=sss&zqkey_id=ttt'
-
-cron 30 22 * * * zqkd_risk.js
+转发和分享阅读，请勿贪心，小心黑号
 */
 
-const jsname = '中青看点风险查询'
+const jsname = '中青看点分享阅读'
 const $ = Env(jsname)
 const notifyFlag = 1; //0为关闭通知，1为打开通知,默认为1
 const logDebug = 0
 
-const notify = $.isNode() ? require('./sendNotify') : '';
+//const notify = $.isNode() ? require('./sendNotify') : '';
 let notifyStr = ''
 
 let rndtime = "" //毫秒
 let httpResult //global buffer
 
-let userCookie = ($.isNode() ? process.env.zqkdCookie : $.getdata('zqkdCookie')) || '';
-let userCookieArr = []
+let zqkdCookie = ($.isNode() ? process.env.zqkdCookie : $.getdata('zqkdCookie')) || '';
+if(!zqkdCookie) zqkdCookie = ($.isNode() ? process.env.zq_cookie : $.getdata('zq_cookie')) || '';
+let zqkdCookieArr = []
 
-let nickname = []
+let userCk = ''
+let readCount = 0
+
+let zqkdShareNum = ($.isNode() ? process.env.zqkdShareNum : $.getdata('zqkdShareNum')) || 0;
+
+let newsItem = ''
+let UserAgent = ''
+let si = ''
+
 ///////////////////////////////////////////////////////////////////
 
 !(async () => {
@@ -33,15 +38,47 @@ let nickname = []
     }
     else
     {
-        if(!(await checkEnv())) {
+        if(!(await checkEnv())){
             return
         }
         
-        await initAccountInfo()
-        await RunRiskInfo()
-        await RunUserBalance()
-        
-        await showmsg()
+        for(let j=0; j<zqkdCookieArr.length; j++) {
+            
+            userCk = zqkdCookieArr[j]
+            
+            console.log(`=========== 账号${j+1} 开始分享转发 ===========`)
+            
+            newsItem = ''
+            readCount = 0
+            await listsNewTag()
+            
+            if(newsItem) {
+                console.log(`开始分享阅读${zqkdShareNum}次`)
+                for(let i=0; i<zqkdShareNum; i++) {
+                    readCount++
+                    let maxWaitTime = 300000
+                    let minWaitTime = 30000
+                    let seedFactor = minWaitTime + 10000*(i+1)
+                    let factor = seedFactor > maxWaitTime ? maxWaitTime : seedFactor
+                    let randomTime = Math.floor(Math.random()*factor) + 1000
+                    let second = Math.floor(randomTime/1000)
+                    UserAgent = `Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.16(0x1800102c) NetType/WIFI Language/zh_CN`
+                    si = randomString(32)
+                    console.log(`--随机延迟${second}秒后开始模拟第${readCount}次分享阅读`)
+                    await $.wait(randomTime)
+                    console.log(`----模拟第${readCount}次阅读，使用si=${si}`)
+                    await shareReadStep1()
+                    await $.wait(Math.floor(Math.random()*500)+500)
+                    await shareReadStep2()
+                    await $.wait(Math.floor(Math.random()*1000)+2000)
+                    await shareReadStep3()
+                    await $.wait(Math.floor(Math.random()*1000)+2000)
+                    await shareReadStep4()
+                    console.log(`----模拟第${readCount}次阅读完成`)
+                }
+                
+            }
+        }
     }
   
 
@@ -60,185 +97,166 @@ async function showmsg() {
 
     if (notifyFlag == 1) {
         $.msg(notifyBody);
-        if($.isNode()){await notify.sendNotify($.name, notifyBody );}
+        //if ($.isNode()){await notify.sendNotify($.name, notifyBody );}
     }
 }
 
 async function checkEnv() {
-    if(userCookie) {
-        if(userCookie.indexOf('@') > -1) {
-            let userCookies = userCookie.split('@')
-            for(let i=0; i<userCookies.length; i++) {
-                userCookieArr.push(replaceCookie(userCookies[i]))
-            }
-        } else {
-            userCookieArr.push(replaceCookie(userCookie))
-        }
-    } else {
-        console.log('未找到userCookie')
-        return false
-    }
-    if(userCookieArr.length == 0) {
-        console.log('未找到有效的userCookie')
+    
+    if(zqkdShareNum == 0) {
+        console.log('当前分享次数设置为0。如果需要开启分享阅读，请设置环境变量zqkdShareNum为要被阅读的次数。')
         return false
     }
     
-    console.log(`共找到${userCookieArr.length}个用户`)
+    if(zqkdCookie) {
+        if(zqkdCookie.indexOf('@') > -1) {
+            let zqkdCookies = zqkdCookie.split('@')
+            for(let i=0; i<zqkdCookies.length; i++) {
+                zqkdCookieArr.push(replaceCookie(zqkdCookies[i]))
+            }
+        } else {
+            zqkdCookieArr.push(replaceCookie(zqkdCookie))
+        }
+    } else {
+        console.log('未找到zqkdCookie或zq_cookie')
+        return false
+    }
+    
+    console.log(`共找到${zqkdCookieArr.length}个cookie`)
+    
     return true
 }
 
-async function initAccountInfo() {
-    for(userIdx=0; userIdx<userCookieArr.length; userIdx++) {
-        await getUserInfo()
+function replaceCookie(zqkdCookieItem) {
+    if(zqkdCookieItem.indexOf('cookie=') == -1 && zqkdCookieItem.indexOf('zqkey=') > -1) {
+        zqkdCookieItem = zqkdCookieItem.replace(/zqkey=/, "cookie=")
     }
+    if(zqkdCookieItem.indexOf('cookie_id=') == -1 && zqkdCookieItem.indexOf('zqkey_id=') > -1) {
+        zqkdCookieItem = zqkdCookieItem.replace(/zqkey_id=/, "cookie_id=")
+    }
+    return zqkdCookieItem
 }
 
-function replaceCookie(userCookieItem) {
-    let replaceItem = ''
-    let zqkey = ''
-    let zqkey_id = ''
-    if(userCookieItem.indexOf('zqkey=') > -1) {
-        zqkey = userCookieItem.match(/zqkey=([\w-]+)/)[1]
-    } else if (userCookieItem.indexOf('cookie=') > -1) {
-        zqkey = userCookieItem.match(/cookie=([\w-]+)/)[1]
-    }
-    if(userCookieItem.indexOf('zqkey_id=') > -1) {
-        zqkey_id = userCookieItem.match(/zqkey_id=([\w-]+)/)[1]
-    } else if (userCookieItem.indexOf('cookie_id=') > -1) {
-        zqkey_id = userCookieItem.match(/cookie_id=([\w-]+)/)[1]
-    }
-    if(userCookieItem.indexOf('uid=') > -1) {
-        uid = userCookieItem.match(/uid=([\w-]+)/)[1]
-    }
-    
-    replaceItem = `uid=${uid}&version_code=63&zqkey=${zqkey}&zqkey_id=${zqkey_id}`
-    
-    return replaceItem
-}
-
-//风险信息
-async function RunRiskInfo() {
-    for(userIdx=0; userIdx<userCookieArr.length; userIdx++) {
-        notifyStr += `\n===== 查询用户${userIdx+1} ${nickname[userIdx]} 风险信息 =====\n`
-        await GetOrderList()
-    }
-}
-
-async function GetOrderList() {
+//转发页面列表
+async function listsNewTag() {
     let caller = printCaller()
-    let rndtime = Math.floor(new Date().getTime())
-    let reqCk = userCookieArr[userIdx].replace(/zqkey/g,'cookie')
-    let body = 'status=all&' + reqCk
-    let url = 'https://kandian.youth.cn/withdraw/getOrderList?_=' + rndtime
-    let urlObject = populatePostUrl(url,body)
-    urlObject.headers.Host = 'kandian.youth.cn'
+    let url = 'http://kandian.wkandian.com/WebApi/ArticleTop/listsNewTag'
+    let urlObject = populatePostUrlShare(url,userCk)
     await httpPost(urlObject,caller)
     let result = httpResult;
     if(!result) return
     
     if(result.status == 1) {
-		notifyStr += `账户${userIdx+1} ${nickname[userIdx]}: \n`
-        for(let item of result.data) {
-            let withdrawStr = ''
-            let withType = (item.type==2) ? '微信' : '支付宝'
-            let desc = (item.description) ? item.description : '无'
-            if (item.status == 0){
-                withdrawStr = '未入账';
-            } else if (item.status == 1){
-                withdrawStr = '已入账';
-            } else if (item.status == 2){
-                withdrawStr = '提现失败';
-            }	
-            notifyStr += `${item.add_time_str} ${withType}提现${item.money}元，${withdrawStr}，风险信息：${desc}\n`		
-        }
-    } else {
-        console.log(`账户${userIdx+1}查询风险信息失败`)
-    }
-}
-
-//账户信息
-async function getUserInfo() {
-    let caller = printCaller()
-    let tmpCk = userCookieArr[userIdx]
-    tmpCk = tmpCk.replace(/zqkey/g,'cookie')
-    let url = 'https://kandian.wkandian.com/v17/NewTask/getSign.json?' + userCookieArr[userIdx]
-    let urlObject = populateGetUrl(url)
-    await httpGet(urlObject,caller)
-    let result = httpResult;
-    if(!result) return
-    
-    if(result.success == true) {
-        let name = result.items.user.nickname ? result.items.user.nickname : ''
-        nickname.push(name)
-    } else {
-        console.log(`查询账户${userIdx+1}信息失败：${result.msg}`)
-    }
-}
-
-//今日收益
-async function RunUserBalance() {
-    for(userIdx=0; userIdx<userCookieArr.length; userIdx++) {
-        await getBalance()
-    }
-}
-
-async function getBalance() {
-    let caller = printCaller()
-    let tmpCk = userCookieArr[userIdx]
-    tmpCk = tmpCk.replace(/zqkey/g,'cookie')
-    let url = 'https://kandian.wkandian.com/wap/user/balance?' + tmpCk
-    let urlObject = populateGetUrl(url)
-    await httpGet(urlObject,caller)
-    let result = httpResult;
-    if(!result) return
-    
-    if(result.status == 0) {
-        notifyStr += `\n账户${userIdx+1} ${nickname[userIdx]}: \n`
-        notifyStr += `【金币总数】：${result.user.score}\n`
-        notifyStr += `【历史收益】：${result.user.total_score}\n`
-        notifyStr += `【今日收益】：${result.user.today_score}\n`
-        for(let i=0; i<result.history.length; i++) {
-            let rewardItem = result.history[i]
-            if(rewardItem.newdate.indexOf('今日收益') > -1) {
-                for(let j=0; j<rewardItem.group.length; j++) {
-                    let groupItem = rewardItem.group[j]
-                    notifyStr += `----【${groupItem.name}】：${groupItem.money}\n`
-                }
-                break;
+        if(result.data && result.data.items && Array.isArray(result.data.items)) {
+            if(result.data.items.length == 0) {
+                console.log('无法找到转发列表，可能是IP原因')
+                return
             }
+            let shareIdx = Math.floor(Math.random()*result.data.items.length)
+            newsItem = result.data.items[shareIdx]
+            await $.wait(1000)
+            await getShareArticleReward()
         }
     } else {
-        console.log(`查询今日收益失败：${result.msg}`)
+        console.log(`查询转发页面列表失败：${result.msg}`)
     }
+}
+
+//转发文章
+async function getShareArticleReward() {
+    let caller = printCaller()
+    let url = 'http://kandian.wkandian.com/WebApi/ShareNew/getShareArticleReward'
+    let reqBody = userCk + '&article_id=' + newsItem.id
+    let urlObject = populatePostUrlShare(url,reqBody)
+    await httpPost(urlObject,caller)
+    let result = httpResult;
+    if(!result) return
+    
+    if(result.status == 1) {
+        if(result.data.share == 1) {
+            console.log(`转发成功，文章标题：【${newsItem.title}】`)
+        }
+    } else {
+        console.log(`转发文章失败：${result.msg}`)
+    }
+}
+
+//分享阅读
+async function shareReadStep1() {
+    let caller = printCaller()
+    let rndtime = Math.floor(new Date().getTime())
+    let share_url = encodeURIComponent(encodeURIComponent(newsItem.share_url+'#'))
+    let shareLink = `https://script.baertt.com/count2/storage?t=${si}&referer=${share_url}&_=${rndtime}&jsonpcallback=jsonp2`
+    let urlObject = populateGetUrlRead(shareLink)
+    await httpGet(urlObject,caller)
+}
+
+async function shareReadStep2() {
+    let caller = printCaller()
+    let rndtime = Math.floor(new Date().getTime())
+    let share_url = encodeURIComponent(encodeURIComponent(newsItem.share_url+'#'))
+    let shareLink = `https://script.baertt.com/count2/visit?type=1&si=${si}&referer=${share_url}&_=${rndtime}&jsonpcallback=jsonp3`
+    let urlObject = populateGetUrlRead(shareLink)
+    await httpGet(urlObject,caller)
+}
+
+async function shareReadStep3() {
+    let caller = printCaller()
+    let rndtime = Math.floor(new Date().getTime())
+    let share_url = encodeURIComponent(encodeURIComponent(newsItem.share_url+'#'))
+    let shareLink = `https://script.baertt.com/count2/openpage?referer=${share_url}&_=${rndtime}&jsonpcallback=jsonp5`
+    let urlObject = populateGetUrlRead(shareLink)
+    await httpGet(urlObject,caller)
+}
+
+async function shareReadStep4() {
+    let caller = printCaller()
+    let rndtime = Math.floor(new Date().getTime())
+    let share_url = encodeURIComponent(encodeURIComponent(newsItem.share_url+'#'))
+    let shareLink = `https://script.baertt.com/count2/callback?si=${si}&referer=${share_url}&_=${rndtime}&jsonpcallback=jsonp6`
+    let urlObject = populateGetUrlRead(shareLink)
+    await httpGet(urlObject,caller)
+}
+
+function randomString(len=32) {
+    let chars = 'qwertyuiopasdfghjklzxcvbnm0123456789012345678901234567890123456789';
+    let maxLen = chars.length;
+    let str = '';
+    for (i = 0; i < len; i++) {
+        str += chars.charAt(Math.floor(Math.random()*maxLen));
+    }
+    return str;
 }
 
 ////////////////////////////////////////////////////////////////////
-function populatePostUrl(url,reqBody){
+function populatePostUrlShare(url,reqBody){
     let rndtime = Math.floor(new Date().getTime()/1000)
     let urlObject = {
         url: url,
         headers: {
             'request_time' : rndtime,
             'Host' : 'kandian.wkandian.com',
-            'device-model' : 'VOG-AL10',
             'device-platform' : 'android',
             'Connection' : 'keep-alive',
+            'app-type' : 'jcweather',
+            'Referer' : 'http://kandian.wkandian.com/h5/hotShare/?' + userCk,
         },
         body: reqBody
     }
     return urlObject;
 }
 
-function populateGetUrl(url){
-    let rndtime = Math.floor(new Date().getTime()/1000)
+function populateGetUrlRead(url){
     let urlObject = {
         url: url,
         headers: {
-            'request_time' : rndtime,
-            'Host' : 'kandian.wkandian.com',
-            'device-model' : 'VOG-AL10',
-            'device-platform' : 'android',
+            'Host' : 'script.baertt.com',
             'Connection' : 'keep-alive',
+            'Accept' : '*/*',
+            'User-Agent' : UserAgent,
+            'Accept-Language' : 'zh-CN,zh-Hans;q=0.9',
+            'Referer' : 'https://bdzx.allcitysz.net/',
+            'Accept-Encoding' : 'gzip, deflate, br',
         }
     }
     return urlObject;
@@ -255,7 +273,7 @@ async function httpPost(url,caller) {
                     $.logErr(err);
                 } else {
                     if (safeGet(data)) {
-                        httpResult = JSON.parse(data);
+                        httpResult = JSON.parse(data,caller);
                         if(logDebug) console.log(httpResult);
                     }
                 }
@@ -278,10 +296,7 @@ async function httpGet(url,caller) {
                     console.log(JSON.stringify(err));
                     $.logErr(err);
                 } else {
-                    if (safeGet(data,caller)) {
-                        httpResult = JSON.parse(data);
-                        if(logDebug) console.log(httpResult);
-                    }
+                    //
                 }
             } catch (e) {
                 $.logErr(e, resp);
